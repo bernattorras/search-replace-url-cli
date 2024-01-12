@@ -27,9 +27,13 @@ class Search_Replace_URLS {
 	 * [--replace-urls]
 	 * : If provided, replace the Original URLs in urls_found_similar.csv with the permalinks from the wp_posts table.
 	 * 
+	 * [--fix-urls]
+	 * : If provided, it will fix the URLs from the urls_found.csv file, removing all extra characters.
+	 * 
      * ## EXAMPLES
      *
 	 * wp search-replace-urls search --search-string=THE_WANTED_URL
+	 * wp search-replace-urls search --fix-urls
      * wp search-replace-urls search --reduce-urls
      * wp search-replace-urls search --find-similar-urls
 	 * wp search-replace-urls search --replace-urls
@@ -44,7 +48,36 @@ class Search_Replace_URLS {
         $reduced_file_name  = 'urls_found_reduced.csv';
 		$search_string      = isset( $assoc_args['search-string'] ) ? $assoc_args['search-string'] : 'moneymaven.io';
 
-        if ( isset( $assoc_args['reduce-urls'] ) ) {
+		if ( isset( $assoc_args['fix-urls'] ) ) {
+			// Remove the last 23 characters of each URL from the $original_file_name and save to $reduced_file_name.
+			$csv_file_path    = $original_file_name;
+			$fixed_file_name  = 'urls_found_fixed.csv';
+			if ( ! file_exists( $csv_file_path ) ) {
+                WP_CLI::error( "CSV file {$csv_file_path} not found." );
+                return;
+            }
+			$csv_content = file_get_contents( $csv_file_path );
+            $lines = explode( PHP_EOL, $csv_content );
+
+			$fixed_urls = array();
+			$fixed_urls[] = 'Original URL' . ',' . 'Fixed URL' .',' . 'Exists';
+
+			foreach ( $lines as $line ) {
+				$original_url = $line;
+				$fixed_url = substr( $original_url, 0, -23 );
+				$fixed_url = str_replace( 'moneymaven.io/mishtalk', 'mishtalk.com', $fixed_url );
+				$exists    = $this->urlExists( $fixed_url );
+				$fixed_urls[] = $line . ',' . $fixed_url . ',' . $exists;
+			}
+
+			// Save the fixed URLs to the new CSV file.
+			$fixed_csv_data = implode( PHP_EOL, $fixed_urls );
+			file_put_contents( $fixed_file_name, $fixed_csv_data );
+			WP_CLI::success( "URLs fixed and saved to {$fixed_file_name}." );
+
+		}
+
+        elseif ( isset( $assoc_args['reduce-urls'] ) ) {
             $csv_file_path = $original_file_name;
 
             if ( ! file_exists( $csv_file_path ) ) {
@@ -225,12 +258,12 @@ class Search_Replace_URLS {
     }
 
 	/**
-	 * Replace the Original URLs in urls_found_similar.csv with the permalinks from the wp_posts table.
+	 * Replace the Original URLs in urls_found_fixed.csv with the permalinks from the wp_posts table.
 	 */
 	private function replace_urls(){
 		global $wpdb;
 
-		$csv_file_path         = 'urls_found_similar.csv';
+		$csv_file_path         = 'urls_found_fixed.csv';
 		$csv_updated_file_path = 'urls_found_similar_updated.csv';
 
 		if ( ! file_exists( $csv_file_path ) ) {
@@ -240,15 +273,17 @@ class Search_Replace_URLS {
 
 		$csv_content     = file_get_contents( $csv_file_path );
 		$lines           = explode( PHP_EOL, $csv_content );
-		$updated_lines[] = 'Original URL,Original Name,Reduced Name, Existing Post Name,Post ID,Permalink,Updated Entries' . PHP_EOL;
+		$updated_lines[] = 'Permalink,Updated Entries' . PHP_EOL;
 
 		foreach ( $lines as $line ) {
-			$fields = explode( ',', $line );
+			$fields       = explode( ',', $line );
 			$original_url = trim( $fields[0] );
-			$permalink = trim( $fields[5] );
+			$permalink    = trim( $fields[1] );
+			$exists       = trim( $fields[2] );
 
 			// Skip the first line and the entries that have no match.
-			if ( strpos( $line, 'Original URL' ) !== false || strpos( $line, 'NO MATCH FOUND' ) !== false ) {
+			if ( strpos( $line, 'Original URL' ) !== false || 1 != $exists ) {
+				WP_CLI::warning( "SKipping 404 URL: {$permalink}" );
 				continue;
 			}
 
@@ -265,7 +300,7 @@ class Search_Replace_URLS {
 
 			// Add the number of updated entries to the CSV line
 			$updated_entries = $wpdb->rows_affected;
-			$updated_lines[] = $line . ',' . $updated_entries . PHP_EOL;
+			$updated_lines[] = $permalink . ',' . $updated_entries . PHP_EOL;
 			WP_CLI::colorize( "%G{$updated_entries} entries updated.%n" );
 		}
 
@@ -273,6 +308,30 @@ class Search_Replace_URLS {
 		// Save the updated CSV file.
 		file_put_contents( $csv_updated_file_path, $updated_lines );
 		WP_CLI::success( "URLs replaced. Results updated in {$csv_updated_file_path}." );
+	}
+
+	/**
+	 * Check if a URL exists.
+	 *
+	 * @param string $url
+	 *
+	 * @return bool
+	 */
+	private function urlExists($url) {
+		$ch = curl_init($url);
+	
+		// Set cURL options
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_NOBODY, true);
+	
+		// Execute cURL session and get the HTTP status code
+		curl_exec($ch);
+		$statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+	
+		// Close cURL session
+		curl_close($ch);
+	
+		return ($statusCode >= 200 && $statusCode < 400);
 	}
 }
 
